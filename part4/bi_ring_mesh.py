@@ -30,8 +30,6 @@ def allgather_bi_ring_mesh(width: int, height: int) -> None:
         right = True
         ring.append(coord_to_id(x, y))
 
-        architechture
-
         while (coord_to_id(x, y) != coord_to_id(1, height - 1)):
             if right:
                 if ((coord_to_id(x, y) % 4) == (width - 1)):
@@ -65,6 +63,54 @@ def allgather_bi_ring_mesh(width: int, height: int) -> None:
         # Hint: chunk 0 will be processed in the original direction
         # Hint: whereas chunk 1 will be processed in the opposite direction
         ### ===============================================
+
+        for itx in range(npus_count):
+            npu = ring[itx]
+            next_itx = (itx + 1) % npus_count
+            # This NPU starts with chunk at Buffer.input, whose ID (=index) is 0
+            c = chunk(rank=npu, buffer=Buffer.input, index=0)
+            output_idx = (npu * 2)
+            
+            # We should run Ring All-Gather to broadcast this chunk to all other NPUs.
+            # Chunk perspective, this process is:
+            #   1. Send this chunk to the next NPU (npu + 1)
+            #   2. The receiver NPU repeats this process
+            #   3. For (N-1) steps
+            next = ring[next_itx]
+            for step in range(npus_count - 1):
+                # send the chunk to the next NPU
+                c = c.copy(dst=next, buffer=Buffer.output, index=output_idx)
+                
+                # Note: now c denotes the received chunk on the next NPU (next),
+                # not the original chunk on the sender NPU (npu).
+                
+                # update next NPU to repeat the process
+                next_itx = (next_itx + 1) % npus_count
+                next = ring[next_itx]
+
+        for itx in range(npus_count):
+            npu = ring[itx]
+            next_itx = (itx - 1) % npus_count
+            # This NPU starts with chunk at Buffer.input, whose ID (=index) is 0
+            c = chunk(rank=npu, buffer=Buffer.input, index=1)
+            output_idx = (npu * 2) + 1
+            
+            # We should run Ring All-Gather to broadcast this chunk to all other NPUs.
+            # Chunk perspective, this process is:
+            #   1. Send this chunk to the next NPU (npu + 1)
+            #   2. The receiver NPU repeats this process
+            #   3. For (N-1) steps
+            next = ring[next_itx]
+            for step in range(npus_count - 1):
+                # send the chunk to the next NPU
+                c = c.copy(dst=next, buffer=Buffer.output, index=output_idx)
+                
+                # Note: now c denotes the received chunk on the next NPU (next),
+                # not the original chunk on the sender NPU (npu).
+                
+                # update next NPU to repeat the process
+                next_itx = (next_itx - 1) % npus_count
+                next = ring[next_itx]
                         
         Check()
         XML()
