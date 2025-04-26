@@ -43,21 +43,17 @@ def hierarchical_mesh(width: int, height: int) -> None:
         
         ### ===============================================
         chunks_per_npu = npus_count // len(npus)
-
+        
         for i, npu in enumerate(npus):
-            # print(f"i: {i}")
-            # print(f"npu: {npu}")
-            chunk_start = npu * chunks_per_npu
-            next_itx = (i + 1) % len(npus)
+
+            # chunk_start = i * chunks_per_npu
 
             for ch in range(chunks_per_npu):
 
                 # this NPU will start sending out chunk (=index) npu.
-                
-                chunk_id = (chunk_start + ch) % npus_count
-                # print(f"ch: {ch}")
-                # print(f"chunk_id: {chunk_id}")
-
+                # chunk_id = chunk_start + ch
+                chunk_id = i + (ch * len(npus))
+                # print(f"NPU: {npu}\nI: {i}\nChunks Per NPU: {chunks_per_npu}\nChunk Start {chunk_start}\nChunk ID: {chunk_id}\n")
                 c = chunk(rank=npu, buffer=Buffer.input, index=chunk_id)
                 
                 # run Ring Reduce-Scatter
@@ -65,7 +61,8 @@ def hierarchical_mesh(width: int, height: int) -> None:
                 #   1. Send this chunk to the next NPU (npu + 1)
                 #   2. The receiver NPU reduces the chunk with its own chunk
                 #   3. Repeat this for (N-1) steps
-                next = npus[next_itx]
+                next_idx = (i + 1) % len(npus)
+                next = npus[next_idx]
                 for step in range(len(npus) - 1):
                     # corresponding chunk on the next NPU
                     next_c = chunk(rank=next, buffer=Buffer.input, index=chunk_id)
@@ -77,8 +74,8 @@ def hierarchical_mesh(width: int, height: int) -> None:
                     # not the original chunk on the sender NPU (npu).
                     
                     # update next NPU
-                    next_itx = (next_itx + 1) % len(npus)
-                    next = npus[next_itx]
+                    next_idx = (next_idx + 1) % len(npus)
+                    next = npus[next_idx]
 
                 # likewise, run Ring All-Gather.
                 # currently, the final reduced chunk is at NPU (next - 1).
@@ -89,8 +86,8 @@ def hierarchical_mesh(width: int, height: int) -> None:
                     c = c.copy(dst=next, buffer=Buffer.input, index=chunk_id)
                     
                     # update next NPU
-                    next_itx = (next_itx + 1) % len(npus)
-                    next = npus[next_itx]
+                    next_idx = (next_idx + 1) % len(npus)
+                    next = npus[next_idx]
 
     def phase1() -> None:
         ### ===============================================
@@ -103,24 +100,13 @@ def hierarchical_mesh(width: int, height: int) -> None:
         
         # Hint: construct the npus list accordingly, and invoke the uni_ring_all_reduce function.
 
-        
-
         for y in range(0, height, 2):
-            x = 0
-            target_y = y + 1
-            right = True
             ring = list()
-            ring.append(coord_to_id(x, y))
-            while (coord_to_id(x, y) != coord_to_id(0, target_y)):
-                if right:
-                    if ((coord_to_id(x, y) % 4) == (width - 1)):
-                        y += 1
-                        right = False
-                    else :
-                        x += 1
-                else:
-                    x -= 1
+            for x in range(0, width):
                 ring.append(coord_to_id(x, y))
+            for x in range(width - 1, 0 - 1, -1):
+                ring.append(coord_to_id(x, y + 1))
+            
 
             npu_lists.append(ring)
 
@@ -143,6 +129,11 @@ def hierarchical_mesh(width: int, height: int) -> None:
         
         phase2_rings = list()
 
+        if len(npu_lists[0])/2 - len(npu_lists[0])//2 != 0.0:
+            mod = 1
+        else:
+            mod = 0
+
         for i in range(len(npu_lists[0])//2):
             gather = list()
             gather2 = list()
@@ -151,6 +142,12 @@ def hierarchical_mesh(width: int, height: int) -> None:
                 gather2.append(ring[0 - 1 - i])
             phase2_rings.append(gather)
             phase2_rings.append(gather2)
+
+        if mod:
+            gather = list()
+            for ring in npu_lists:
+                gather.append(ring[len(npu_lists[0])//2])
+            phase2_rings.append(gather)
 
         # print("PHASE TWO")
         for ring in phase2_rings:
